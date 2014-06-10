@@ -2,6 +2,8 @@
 /**
  * IonAuth MongoDB Model
  *
+ * Version: 2.5.2
+ *
  * A rewrite of IonAuth model to use MongoDB as database backend. It
  * requires both CodeIgniter MongoDB Active Record and CodeIgniter MongoDB Session
  * libraries installed.
@@ -154,6 +156,20 @@ class Ion_auth_mongodb_model extends CI_Model {
 	 */
 	protected $error_end_delimiter;
 
+	/**
+	 * caching of users and their groups
+	 *
+	 * @var array
+	 */
+	public $_cache_user_in_group = array();
+
+	/**
+	 * caching of groups
+	 *
+	 * @var array
+	 */
+	protected $_cache_groups = array();
+
 	// ------------------------------------------------------------------------
 
 	/**
@@ -166,7 +182,6 @@ class Ion_auth_mongodb_model extends CI_Model {
 		$this->load->config('ion_auth', TRUE);
 		$this->load->helper('cookie');
 		$this->load->helper('date');
-		$this->load->library('session');
 		$this->lang->load('ion_auth');
 
 		// Initialize MongoDB collection names
@@ -201,13 +216,15 @@ class Ion_auth_mongodb_model extends CI_Model {
 			if ($this->random_rounds)
 			{
 				$rand   = rand($this->min_rounds,$this->max_rounds);
-				$rounds = array('rounds' => $rand);
+				$params = array('rounds' => $rand);
 			}
 			else
 			{
-				$rounds = array('rounds' => $this->default_rounds);
+				$params = array('rounds' => $this->default_rounds);
 			}
-			$this->load->library('bcrypt',$rounds);
+			
+			$params['salt_prefix'] = $this->config->item('salt_prefix', 'ion_auth');
+			$this->load->library('bcrypt',$params);
 		}
 
 		$this->trigger_events('model_constructor');
@@ -574,7 +591,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 		}
 
 		$this->trigger_events('extra_where');
-
+		$username = new MongoRegex('/^'.$username.'$/i');
 		return count($this->mongo_db
 			->where('username', $username)
 			->get($this->collections['users'])) > 0;
@@ -597,7 +614,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 		}
 
 		$this->trigger_events('extra_where');
-
+		$email = new MongoRegex('/^'.$email.'$/i');
 		return count($this->mongo_db
 			->where('email', $email)
 			->get($this->collections['users'])) > 0;
@@ -880,7 +897,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 					'identity'       => $user->{$this->identity_column},
 					'username'       => $user->username,
 					'email'          => $user->email,
-					'user_id'        => $user->_id,
+					'user_id'        => $user->_id->{'$id'},
 					'old_last_login' => $user->last_login
                 );
                 $this->session->set_userdata($session_data);
@@ -1382,7 +1399,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 	 *
 	 * @return bool
 	 */
-	public function remove_from_group($group_name = FALSE, $user_id = FALSE)
+	public function remove_from_group($group_id = FALSE, $user_id = FALSE)
 	{
 		$this->trigger_events('remove_from_group');
 
@@ -1401,9 +1418,9 @@ class Ion_auth_mongodb_model extends CI_Model {
 		else
 		{
 			return $this->mongo_db
-				->where('_id', new MongoId($user_id))
-				->pull('groups', array($group_id))
-				->update($this->collections['users']);
+			->where('_id', new MongoId($user_id))
+			->pull('groups', $group_id)
+			->update($this->collections['users']);
 		}
 	}
 
@@ -1512,7 +1529,15 @@ class Ion_auth_mongodb_model extends CI_Model {
 		// Hash new password
 		if (array_key_exists('password', $data))
 		{
-			$data['password'] = $this->hash_password($data['password'], $user->salt);
+			if( ! empty($data['password']))
+			{
+				$data['password'] = $this->hash_password($data['password'], $user->salt);
+			}
+			else
+			{
+				// unset password so it doesn't effect database entry if password field empty
+				unset($data['password']);
+			}
 		}
 
 		// TODO: DO WE NEED TO CHECK EMAIL AND USERNAME VALUES REGARDLESS
@@ -1612,10 +1637,21 @@ class Ion_auth_mongodb_model extends CI_Model {
 	{
 		$this->trigger_events('set_lang');
 
+		// if the user_expire is set to zero we'll set the expiration two years from now.
+		if($this->config->item('user_expire', 'ion_auth') === 0)
+		{
+			$expire = (60*60*24*365*2);
+		}
+		// otherwise use what is set
+		else
+		{
+			$expire = $this->config->item('user_expire', 'ion_auth');
+		}
+
 		set_cookie(array(
 			'name'   => 'lang_code',
 			'value'  => $lang,
-			'expire' => $this->config->item('user_expire', 'ion_auth') + time(),
+			'expire' => $expire
 		));
 
 		return TRUE;
@@ -1628,7 +1664,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 	 *
 	 * @return bool
 	 */
-	private function remember_user($id)
+	public function remember_user($id)
 	{
 		$this->trigger_events('pre_remember_user');
 
@@ -1650,16 +1686,27 @@ class Ion_auth_mongodb_model extends CI_Model {
 		// Set cookies
 		if ($updated)
 		{
+			// if the user_expire is set to zero we'll set the expiration two years from now.
+			if($this->config->item('user_expire', 'ion_auth') === 0)
+			{
+				$expire = (60*60*24*365*2);
+			}
+			// otherwise use what is set
+			else
+			{
+				$expire = $this->config->item('user_expire', 'ion_auth');
+			}
+
 			set_cookie(array(
-				'name'   => 'identity',
-				'value'  => $user->{$this->identity_column},
-				'expire' => $this->config->item('user_expire', 'ion_auth'),
+			    'name'   => 'identity',
+			    'value'  => $user->{$this->identity_column},
+			    'expire' => $expire
 			));
 
 			set_cookie(array(
-				'name'   => 'remember_code',
-				'value'  => $salt,
-				'expire' => $this->config->item('user_expire', 'ion_auth'),
+			    'name'   => 'remember_code',
+			    'value'  => $salt,
+			    'expire' => $expire
 			));
 
 			$this->trigger_events(array('post_remember_user', 'remember_user_successful'));
@@ -1704,7 +1751,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 			$user = (object) $document[0];
 
 			// Update last login timestamp
-			$this->update_last_login($user->id);
+			$this->update_last_login($user->_id);
 
 			// And set user session data
 			$this->session->set_userdata(array(
@@ -1726,6 +1773,131 @@ class Ion_auth_mongodb_model extends CI_Model {
 		$this->trigger_events(array('post_login_remembered_user', 'post_login_remembered_user_unsuccessful'));
 		return FALSE;
 	}
+
+
+	/**
+	 * create_group
+	 *
+	 * @author Ben Edmunds
+	*/
+	public function create_group($group_name = FALSE, $group_description = '', $additional_data = array())
+	{
+		// bail if the group name was not passed
+		if(!$group_name)
+		{
+			$this->set_error('group_name_required');
+			return FALSE;
+		}
+
+		// bail if the group name already exists
+		$existing_group = $this->where('name', $group_name)->group()->document();
+		if(isset($existing_group) && !empty($existing_group))
+		{
+			$this->set_error('group_already_exists');
+			return FALSE;
+		}
+
+		$data = array('name'=>$group_name,'description'=>$group_description);
+
+		//filter out any data passed that doesnt have a matching column in the groups table
+		//and merge the set group data and the additional data
+		if (!empty($additional_data)) $data = array_merge($this->_filter_data($this->collections['groups'], $additional_data), $data);
+
+		$this->trigger_events('extra_group_set');
+
+		// insert the new group
+		$group_id = $this->mongo_db->insert($this->collections['groups'], $data);
+
+		// report success
+		$this->set_message('group_creation_successful');
+
+		// return the brand new group id
+		return $group_id;
+	}
+
+	/**
+	 * update_group
+	 *
+	 * @return bool
+	 * @author Ben Edmunds
+	 **/
+	public function update_group($group_id = FALSE, $group_name = FALSE, $additional_data = array())
+	{
+		if (empty($group_id)) return FALSE;
+
+		$data = array();
+
+		if (!empty($group_name))
+		{
+			// we are changing the name, so do some checks
+
+			// bail if the group name already exists
+			$existing_group = $this->where('name', $group_name)->group()->document();
+			if(isset($existing_group->id) && $existing_group->id != $group_id)
+			{
+				$this->set_error('group_already_exists');
+				return FALSE;
+			}
+
+			$data['name'] = $group_name;
+		}
+
+
+		// IMPORTANT!! Third parameter was string type $description; this following code is to maintain backward compatibility
+		// New projects should work with 3rd param as array
+		if (is_string($additional_data)) $additional_data = array('description' => $additional_data);
+
+
+		//filter out any data passed that doesnt have a matching column in the groups table
+		//and merge the set group data and the additional data
+		if (!empty($additional_data)) $data = array_merge($this->_filter_data($this->collections['groups'], $additional_data), $data);
+
+
+		$updated = $this->mongo_db
+			->where('_id', new MongoId($group_id))
+			->set($data)
+			->update($this->collections['groups']);
+
+		$this->set_message('group_update_successful');
+
+		return TRUE;
+	}
+
+	/**
+	* delete_group
+	*
+	* @return bool
+	* @author Ben Edmunds
+	**/
+	public function delete_group($group_id = FALSE)
+	{
+		// bail if mandatory param not set
+		if(!$group_id || empty($group_id))
+		{
+			return FALSE;
+		}
+
+		$this->trigger_events('pre_delete_group');
+
+
+		// delete this group
+		$deleted = $this->mongo_db
+			->where('_id', new MongoId($group_id))
+			->delete($this->collections['groups']);
+
+		if (!$deleted)
+		{
+			$this->trigger_events(array('post_delete_group', 'post_delete_group_unsuccessful'));
+			$this->set_error('group_delete_unsuccessful');
+			return FALSE;
+		}
+
+
+		$this->trigger_events(array('post_delete_group', 'post_delete_group_successful'));
+		$this->set_message('group_delete_successful');
+		return TRUE;
+	}
+
 
 	// ------------------------------------------------------------------------
 
@@ -1870,6 +2042,29 @@ class Ion_auth_mongodb_model extends CI_Model {
 	// ------------------------------------------------------------------------
 
 	/**
+	 * Return messages as an array, langified or not
+	 **/
+	public function messages_array($langify = TRUE)
+	{
+		if ($langify)
+		{
+			$_output = array();
+			foreach ($this->messages as $message)
+			{
+				$messageLang = $this->lang->line($message) ? $this->lang->line($message) : '##' . $message . '##';
+				$_output[] = $this->message_start_delimiter . $messageLang . $this->message_end_delimiter;
+			}
+			return $_output;
+		}
+		else
+		{
+			return $this->messages;
+		}
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
 	 * Sets an error message
 	 */
 	public function set_error($error)
@@ -1893,6 +2088,29 @@ class Ion_auth_mongodb_model extends CI_Model {
 		}
 
 		return $_output;
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Return errors as an array, langified or not
+	 **/
+	public function errors_array($langify = TRUE)
+	{
+		if ($langify)
+		{
+			$_output = array();
+			foreach ($this->errors as $error)
+			{
+				$errorLang = $this->lang->line($error) ? $this->lang->line($error) : '##' . $error . '##';
+				$_output[] = $this->error_start_delimiter . $errorLang . $this->error_end_delimiter;
+			}
+			return $_output;
+		}
+		else
+		{
+			return $this->errors;
+		}
 	}
 
 	// ------------------------------------------------------------------------
@@ -1940,15 +2158,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 	 */
 	protected function _prepare_ip($ip_address)
 	{
-		if ($this->db->platform() === 'postgre')
-		{
-			return $ip_address;
-		}
-		else
-		{
-			// Return the packed in_addr representation of the passed IP to be stored
-			return inet_pton($ip_address);
-		}
+		return $ip_address;
 	}
 
 	// ------------------------------------------------------------------------
@@ -1982,7 +2192,7 @@ class Ion_auth_mongodb_model extends CI_Model {
 		}
 		elseif ( ! isset($data['id']) && isset($data['_id']))
 		{
-			$data['id'] = $data['_id'];
+			$data['id'] = $data['_id']->{'$id'};
 		}
 
 		return is_object($result) ? (object) $data : $data;

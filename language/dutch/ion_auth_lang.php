@@ -47,5 +47,10 @@ $lang['update_unsuccessful'] 		 	 = 'Account bijwerken is mislukt';
 $lang['delete_successful'] 		 	 = 'Gebruiker is verwijderd';
 $lang['delete_unsuccessful'] 		 	 = 'Gebruiker verwijderen is mislukt';
 
+// Email Subjects - TODO Please Translate
+$lang['email_forgotten_password_subject']    = 'Verificatie Verloren Wachtwoord';
+$lang['email_new_password_subject']          = 'Nieuw wachtwoord';
+$lang['email_activation_subject']            = 'Account Activering';
+
 /* End of file ion_auth_lang.php */
 /* Location: ./system/application/language/dutch/ion_auth_lang.php */

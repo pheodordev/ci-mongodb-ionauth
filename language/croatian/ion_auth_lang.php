@@ -48,3 +48,8 @@ $lang['update_successful'] 		 	         = 'Podaci o računu uspješno su a≈æu
 $lang['update_unsuccessful'] 		 	     = 'Podaci o računu nisu ažurirani';
 $lang['delete_successful'] 		 	         = 'Korisnik je obrisan';
 $lang['delete_unsuccessful'] 		 	     = 'Brisanje korisnika nije uspjelo';
+
+// Email Subjects - TODO Please Translate
+$lang['email_forgotten_password_subject']    = 'Potvrda o zaboravljenoj lozinci';
+$lang['email_new_password_subject']          = 'Nova lozinka';
+$lang['email_activation_subject']            = 'Aktivacija računa';
